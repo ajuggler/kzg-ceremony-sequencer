@@ -1,16 +1,12 @@
 use crate::{
-    actions, actions::entropy_from_str, common::mock_auth_service::EthUser, AnyTestUser, Harness,
-    TestUser,
+    actions,
+    actions::entropy_from_str,
+    common::{harness::Harness, mock_auth_service::TestUser},
 };
-use ethers_core::types::Signature;
-use ethers_signers::Signer;
 use http::StatusCode;
 use kzg_ceremony_crypto::{
-    signature,
-    signature::{BlsSignature, EcdsaSignature},
-    Arkworks, BatchContribution, BatchTranscript, DefaultEngine, BLST, G1,
+    signature::BlsSignature, Arkworks, BatchContribution, BatchTranscript, DefaultEngine, BLST, G1,
 };
-use rand::{thread_rng, Rng};
 
 type PostConditionCheck = Box<dyn FnOnce(&BatchTranscript) + Send + Sync>;
 
@@ -61,56 +57,7 @@ pub async fn well_behaved(
         )
         .expect("Adding entropy must be possible");
 
-    if let AnyTestUser::Eth(EthUser { wallet, .. }) = &user.user {
-        contribution.ecdsa_signature = EcdsaSignature(Some(
-            wallet
-                .sign_typed_data(&signature::ContributionTypedData::from(&contribution))
-                .await
-                .unwrap(),
-        ));
-    }
-
-    actions::contribute_successfully(
-        harness,
-        client,
-        &session_id,
-        &contribution,
-        &user.identity().to_string(),
-    )
-    .await;
-
-    Box::new(move |transcript| {
-        actions::assert_includes_contribution(
-            transcript,
-            &contribution,
-            &user,
-            user.is_eth(),
-            true,
-        );
-    })
-}
-
-pub async fn wrong_ecdsa(
-    harness: &Harness,
-    client: &reqwest::Client,
-    user: TestUser,
-) -> PostConditionCheck {
-    let session_id = actions::login(harness, client, &user).await;
-    let mut contribution = await_contribution_slot(harness, client, &session_id, false).await;
-    contribution
-        .add_entropy::<DefaultEngine>(
-            &entropy_from_str(&user.identity().to_string()),
-            &user.identity(),
-        )
-        .expect("Adding entropy must be possible");
-
-    let mut random_bytes = [0; 65];
-    (0..65).for_each(|i| {
-        random_bytes[i] = thread_rng().gen();
-    });
-
-    contribution.ecdsa_signature =
-        EcdsaSignature(Some(Signature::try_from(&random_bytes[..]).unwrap()));
+    // GitHub users do not provide an ECDSA signature
 
     actions::contribute_successfully(
         harness,

@@ -1,14 +1,10 @@
-mod ethereum;
 mod github;
 
 use crate::sessions::SessionId;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::RwLock;
 
-pub use self::{
-    ethereum::{eth_oauth_client, EthAuthOptions, EthOAuthClient},
-    github::{github_oauth_client, GithubAuthOptions, GithubOAuthClient},
-};
+pub use self::github::{github_oauth_client, GithubAuthOptions, GithubOAuthClient};
 
 pub type SharedAuthState = Arc<RwLock<AuthState>>;
 pub type IdTokenSub = String;
