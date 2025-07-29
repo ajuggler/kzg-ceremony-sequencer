@@ -15,7 +15,7 @@ fn duration_from_str(value: &str) -> Result<Duration, ParseIntError> {
 #[group(skip)]
 pub struct Options {
     /// Timeout for participants to contribute to the ceremony in seconds.
-    #[clap(long, env, value_parser=duration_from_str, default_value="180")]
+    #[clap(long, env, value_parser=duration_from_str, default_value="360")]
     pub compute_deadline: Duration,
 
     /// How often participants should ping the server to keep their session
@@ -54,14 +54,14 @@ impl Options {
 
 #[derive(Default)]
 pub struct LobbyState {
-    pub sessions_in_lobby:     BTreeMap<SessionId, SessionInfo>,
+    pub sessions_in_lobby: BTreeMap<SessionId, SessionInfo>,
     pub sessions_out_of_lobby: BTreeMap<SessionId, SessionInfo>,
-    pub active_contributor:    ActiveContributor,
+    pub active_contributor: ActiveContributor,
 }
 
 #[derive(Clone, Debug)]
 pub struct SessionInfoWithId {
-    id:   SessionId,
+    id: SessionId,
     info: SessionInfo,
 }
 
@@ -103,7 +103,7 @@ pub enum ActiveContributorError {
 
 #[derive(Clone)]
 pub struct SharedLobbyState {
-    inner:   Arc<Mutex<LobbyState>>,
+    inner: Arc<Mutex<LobbyState>>,
     options: Options,
 }
 
@@ -131,7 +131,7 @@ impl SharedLobbyState {
 
             state.active_contributor = ActiveContributor::AwaitingContribution {
                 session: SessionInfoWithId {
-                    id:   participant.clone(),
+                    id: participant.clone(),
                     info: session_info,
                 },
                 last_contribution_file_request: Instant::now(),
@@ -293,7 +293,7 @@ impl SharedLobbyState {
             .sessions_in_lobby
             .iter()
             .map(|(id, info)| SessionInfoWithId {
-                id:   id.clone(),
+                id: id.clone(),
                 info: info.clone(),
             })
             .collect()

@@ -60,8 +60,8 @@ pub type Engine = kzg_ceremony_crypto::DefaultEngine;
 pub type SharedTranscript = Arc<RwLock<BatchTranscript>>;
 pub type SharedCeremonyStatus = Arc<AtomicUsize>;
 
-pub const DEFAULT_CEREMONY_SIZES: &str = "4096,65:8192,65:16384,65:32768,65";
-pub const MAX_CONTRIBUTION_SIZE: usize = 10_485_760; // 10MB
+pub const DEFAULT_CEREMONY_SIZES: &str = "4096,65:8192,65:16384,65:262144,65";
+pub const MAX_CONTRIBUTION_SIZE: usize = 36_700_160; // 35MB
 
 #[derive(Clone, Debug, PartialEq, Eq, Parser)]
 #[group(skip)]
@@ -75,7 +75,6 @@ pub struct Options {
 
     #[clap(flatten)]
     pub github: GithubAuthOptions,
-
 
     /// Allow multiple contributions from the same participant.
     #[clap(long, env, default_value = "false")]
