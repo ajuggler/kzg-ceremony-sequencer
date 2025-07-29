@@ -1,9 +1,9 @@
 use crate::{
     lobby::SharedLobbyState,
-    oauth::{EthOAuthClient, GithubOAuthClient, SharedAuthState},
+    oauth::{GithubOAuthClient, SharedAuthState},
     sessions::IdToken,
     storage::{PersistentStorage, StorageError},
-    EthAuthOptions, Options, SessionId, SessionInfo,
+    Options, SessionId, SessionInfo,
 };
 use axum::{
     async_trait,
@@ -12,7 +12,6 @@ use axum::{
     Extension, Json,
 };
 use chrono::DateTime;
-use eyre::eyre;
 use http::StatusCode;
 use kzg_ceremony_crypto::{signature::identity::Identity, ErrorCode};
 use oauth2::{
@@ -24,14 +23,14 @@ use serde_json::{json, Map, Value};
 use strum::IntoStaticStr;
 use thiserror::Error;
 use tokio::time::Instant;
-use tracing::{log::error, warn};
+use tracing::warn;
 use url::Url;
 
 #[derive(Debug, Error)]
 #[error("{payload}")]
 pub struct AuthError {
     pub redirect: Option<String>,
-    pub payload:  AuthErrorPayload,
+    pub payload: AuthErrorPayload,
 }
 
 #[derive(Debug, Error, IntoStaticStr)]
@@ -59,20 +58,18 @@ impl ErrorCode for AuthErrorPayload {
 }
 
 pub struct UserVerifiedResponse {
-    id_token:       IdToken,
-    session_id:     String,
+    id_token: IdToken,
+    session_id: String,
     as_redirect_to: Option<String>,
 }
 
 pub struct AuthUrl {
-    eth_auth_url:    String,
     github_auth_url: String,
 }
 
 impl IntoResponse for AuthUrl {
     fn into_response(self) -> Response {
         Json(json!({
-            "eth_auth_url": self.eth_auth_url,
             "github_auth_url": self.github_auth_url,
         }))
         .into_response()
@@ -133,7 +130,6 @@ pub async fn auth_client_link(
     Query(params): Query<AuthClientLinkQueryParams>,
     Extension(options): Extension<Options>,
     Extension(lobby_state): Extension<SharedLobbyState>,
-    Extension(eth_client): Extension<EthOAuthClient>,
     Extension(gh_client): Extension<GithubOAuthClient>,
 ) -> Result<AuthUrl, AuthErrorPayload> {
     let session_count = lobby_state.get_session_count().await;
@@ -147,18 +143,11 @@ pub async fn auth_client_link(
     }
     .encode_into_csrf();
 
-    let eth_auth_request = eth_client
-        .authorize_url(|| csrf_with_redirect)
-        .add_scope(Scope::new("openid".to_string()));
-
-    let (auth_url, csrf_with_redirect) = eth_auth_request.url();
-
     let gh_auth_request = gh_client.client.authorize_url(|| csrf_with_redirect);
 
     let (gh_url, _) = gh_auth_request.url();
 
     Ok(AuthUrl {
-        eth_auth_url:    auth_url.to_string(),
         github_auth_url: gh_url.to_string(),
     })
 }
@@ -170,13 +159,13 @@ pub async fn auth_client_link(
 // an identity provider
 #[derive(Debug, Deserialize)]
 pub struct RawAuthPayload {
-    code:  String,
+    code: String,
     state: String,
 }
 
 #[derive(Debug)]
 pub struct AuthPayload {
-    code:        String,
+    code: String,
     redirect_to: Option<String>,
 }
 
@@ -214,7 +203,7 @@ where
                     .into_response()
             })?;
         Ok(Self {
-            code:        raw.code,
+            code: raw.code,
             redirect_to: json_decoded_state.redirect,
         })
     }
@@ -222,8 +211,8 @@ where
 
 #[derive(Debug, Deserialize)]
 struct GhUserInfo {
-    id:         u64,
-    login:      String,
+    id: u64,
+    login: String,
     created_at: String,
 }
 
@@ -250,7 +239,7 @@ pub async fn github_callback(
             }
             AuthError {
                 redirect: payload.redirect_to.clone(),
-                payload:  AuthErrorPayload::InvalidAuthCode,
+                payload: AuthErrorPayload::InvalidAuthCode,
             }
         })?;
 
@@ -262,25 +251,25 @@ pub async fn github_callback(
         .await
         .map_err(|_| AuthError {
             redirect: payload.redirect_to.clone(),
-            payload:  AuthErrorPayload::FetchUserDataError,
+            payload: AuthErrorPayload::FetchUserDataError,
         })?;
     let gh_user_info = response.json::<GhUserInfo>().await.map_err(|_| AuthError {
         redirect: payload.redirect_to.clone(),
-        payload:  AuthErrorPayload::CouldNotExtractUserData,
+        payload: AuthErrorPayload::CouldNotExtractUserData,
     })?;
     let creation_time =
         DateTime::parse_from_rfc3339(&gh_user_info.created_at).map_err(|_| AuthError {
             redirect: payload.redirect_to.clone(),
-            payload:  AuthErrorPayload::CouldNotExtractUserData,
+            payload: AuthErrorPayload::CouldNotExtractUserData,
         })?;
     if creation_time > options.github.gh_max_account_creation_time {
         return Err(AuthError {
             redirect: payload.redirect_to.clone(),
-            payload:  AuthErrorPayload::UserCreatedAfterDeadline,
+            payload: AuthErrorPayload::UserCreatedAfterDeadline,
         });
     }
     let user = Identity::Github {
-        id:       gh_user_info.id,
+        id: gh_user_info.id,
         username: gh_user_info.login.clone(),
     };
     post_authenticate(
@@ -292,134 +281,6 @@ pub async fn github_callback(
         options.multi_contribution,
     )
     .await
-}
-
-#[derive(Debug, Deserialize)]
-struct EthUserInfo {
-    sub: String,
-}
-
-// This endpoint allows one to consume an oAUTH authorisation code
-//  and produce a JWT token
-// So Sequencer could give out fake identities, we are trusting the sequencer
-// to not do that.
-//
-// Now this is catchable by the client. They will clearly see that the sequencer
-// was malicious. What can happen is sequencer can claim that someone
-// participated when they did not. Is this Okay? Maybe that person can then just
-// say they did not
-#[allow(clippy::too_many_arguments)]
-pub async fn eth_callback(
-    payload: AuthPayload,
-    Extension(options): Extension<Options>,
-    Extension(auth_state): Extension<SharedAuthState>,
-    Extension(lobby_state): Extension<SharedLobbyState>,
-    Extension(storage): Extension<PersistentStorage>,
-    Extension(oauth_client): Extension<EthOAuthClient>,
-    Extension(http_client): Extension<reqwest::Client>,
-) -> Result<UserVerifiedResponse, AuthError> {
-    let token = oauth_client
-        .exchange_code(AuthorizationCode::new(payload.code))
-        .request_async(async_http_client)
-        .await
-        .map_err(|_| AuthError {
-            redirect: payload.redirect_to.clone(),
-            payload:  AuthErrorPayload::InvalidAuthCode,
-        })?;
-
-    let response = http_client
-        .get(&options.ethereum.eth_userinfo_url)
-        .bearer_auth(token.access_token().secret())
-        .send()
-        .await
-        .map_err(|_| AuthError {
-            redirect: payload.redirect_to.clone(),
-            payload:  AuthErrorPayload::FetchUserDataError,
-        })?;
-
-    let eth_user = response
-        .json::<EthUserInfo>()
-        .await
-        .map_err(|_| AuthError {
-            redirect: payload.redirect_to.clone(),
-            payload:  AuthErrorPayload::CouldNotExtractUserData,
-        })?;
-
-    let addr_parts: Vec<_> = eth_user.sub.split(':').collect();
-    let address = (*addr_parts.get(2).ok_or(AuthError {
-        redirect: payload.redirect_to.clone(),
-        payload:  AuthErrorPayload::CouldNotExtractUserData,
-    })?)
-    .to_string();
-
-    let tx_count = get_tx_count(
-        &address,
-        &options.ethereum.eth_nonce_verification_block,
-        &http_client,
-        &options.ethereum,
-    )
-    .await
-    .map_err(|e| {
-        error!("Could not get tx count for {address}: {e}");
-        AuthError {
-            redirect: payload.redirect_to.clone(),
-            payload:  AuthErrorPayload::CouldNotExtractUserData,
-        }
-    })?;
-
-    if tx_count < options.ethereum.eth_min_nonce {
-        return Err(AuthError {
-            redirect: payload.redirect_to.clone(),
-            payload:  AuthErrorPayload::UserCreatedAfterDeadline,
-        });
-    }
-
-    let user_data = Identity::eth_from_str(&address).map_err(|_| AuthError {
-        redirect: payload.redirect_to.clone(),
-        payload:  AuthErrorPayload::CouldNotExtractUserData,
-    })?;
-
-    post_authenticate(
-        auth_state,
-        lobby_state,
-        storage,
-        user_data,
-        payload.redirect_to,
-        options.multi_contribution,
-    )
-    .await
-}
-
-// TODO: This has many failure modes and should return and eyre::Result.
-async fn get_tx_count(
-    address: &str,
-    at_block: &str,
-    client: &reqwest::Client,
-    options: &EthAuthOptions,
-) -> eyre::Result<u64> {
-    let rpc_payload = json!({
-        "id": 1,
-        "jsonrpc": "2.0",
-        "params": [&address, &at_block],
-        "method": "eth_getTransactionCount"
-    });
-
-    let rpc_response = client
-        .post(options.eth_rpc_url.get_secret())
-        .json(&rpc_payload)
-        .send()
-        .await?;
-
-    let rpc_response_json = rpc_response.json::<serde_json::Value>().await?;
-
-    let rpc_result = rpc_response_json
-        .get("result")
-        .ok_or(eyre!("malformed response JSON"))?
-        .as_str()
-        .ok_or(eyre!("malformed response JSON"))?;
-
-    let result = u64::from_str_radix(rpc_result.trim_start_matches("0x"), 16)?;
-    Ok(result)
 }
 
 async fn post_authenticate(
@@ -435,7 +296,7 @@ async fn post_authenticate(
         Err(error) => {
             return Err(AuthError {
                 redirect: redirect_to.clone(),
-                payload:  AuthErrorPayload::Storage(error),
+                payload: AuthErrorPayload::Storage(error),
             })
         }
         Ok(true) => {
@@ -444,7 +305,7 @@ async fn post_authenticate(
             } else {
                 return Err(AuthError {
                     redirect: redirect_to.clone(),
-                    payload:  AuthErrorPayload::UserAlreadyContributed,
+                    payload: AuthErrorPayload::UserAlreadyContributed,
                 });
             }
         }
@@ -470,19 +331,22 @@ async fn post_authenticate(
 
     let id_token = IdToken {
         identity: user_data,
-        exp:      u64::MAX,
+        exp: u64::MAX,
     };
 
     lobby_state
-        .insert_session(session_id.clone(), SessionInfo {
-            token:                 id_token.clone(),
-            last_ping_time:        Instant::now(),
-            is_first_ping_attempt: true,
-        })
+        .insert_session(
+            session_id.clone(),
+            SessionInfo {
+                token: id_token.clone(),
+                last_ping_time: Instant::now(),
+                is_first_ping_attempt: true,
+            },
+        )
         .await
         .map_err(|_| AuthError {
             redirect: redirect_to.clone(),
-            payload:  AuthErrorPayload::LobbyIsFull,
+            payload: AuthErrorPayload::LobbyIsFull,
         })?;
 
     Ok(UserVerifiedResponse {

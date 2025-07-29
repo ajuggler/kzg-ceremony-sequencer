@@ -1,7 +1,5 @@
-use crate::{
-    common::mock_auth_service::{AnyTestUser, TestUser},
-    Address, Harness,
-};
+use crate::common::{harness::Harness, mock_auth_service::TestUser};
+use ethers_core::types::Address;
 use ethers_core::types::Signature;
 use http::StatusCode;
 use kzg_ceremony_crypto::{BatchContribution, BatchTranscript, G2};
@@ -43,27 +41,7 @@ pub async fn get_and_validate_csrf_token(harness: &Harness, redirect_url: Option
     .remove("state")
     .expect("github_auth_url must contain an url-encoded CSRF token");
 
-    let csrf_for_eth = Url::parse(
-        response
-            .get("eth_auth_url")
-            .expect("/auth/request_link response must contain an eth_auth_url")
-            .as_str()
-            .expect("eth_auth_url must be a string"),
-    )
-    .expect("eth_auth_url must be a valid Url")
-    .query_pairs()
-    .into_owned()
-    .collect::<HashMap<_, _>>()
-    .remove("state")
-    .expect("eth_auth_url must contain an url-encoded CSRF token");
-
-    assert_eq!(
-        csrf_for_eth, csrf_for_gh,
-        "CSRF tokens must be the same for all providers but got {} and {}",
-        csrf_for_eth, csrf_for_gh
-    );
-
-    csrf_for_eth
+    csrf_for_gh
 }
 
 pub fn entropy_from_str(seed: &str) -> Secret<[u8; 32]> {
@@ -83,10 +61,7 @@ pub async fn request_auth_callback(
     user: &TestUser,
     csrf: &str,
 ) -> reqwest::Response {
-    let url_ext = match user.user {
-        AnyTestUser::Eth(_) => "auth/callback/eth",
-        AnyTestUser::Gh(_) => "auth/callback/github",
-    };
+    let url_ext = "auth/callback/github";
     http_client
         .get(harness.options.server.join(url_ext).unwrap())
         .query(&[("state", csrf), ("code", &user.id.to_string())])
